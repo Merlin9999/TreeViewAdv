@@ -3,14 +3,12 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Drawing;
-using System.Security.Permissions;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 using System.Collections;
-
 using Aga.Controls.Tree.NodeControls;
-using Aga.Controls.Threading;
-
+using System.Linq;
 
 namespace Aga.Controls.Tree
 {
@@ -39,7 +37,9 @@ namespace Aga.Controls.Tree
 		private TreeColumn _hotColumn;
 		private IncrementalSearch _search;
 		private List<TreeNodeAdv> _expandingNodes = new List<TreeNodeAdv>();
-		private AbortableThreadPool _threadPool = new AbortableThreadPool();
+		private object _lock = new object();
+		private CancellationTokenSource _cancellationTokenSource = new CancellationTokenSource();
+		private List<Task> _tasks = new List<Task>();
 
 		#region Public Events
 
@@ -554,7 +554,6 @@ namespace Aga.Controls.Tree
 
 		protected override CreateParams CreateParams
 		{
-			[SecurityPermission(SecurityAction.LinkDemand, Flags = SecurityPermissionFlag.UnmanagedCode)]
 			get
 			{
 				CreateParams res = base.CreateParams;
@@ -787,12 +786,24 @@ namespace Aga.Controls.Tree
 		{
 			lock (_expandingNodes)
 			{
-				_threadPool.CancelAll(true);
+				AbortTasks();
 				for (int i = 0; i < _expandingNodes.Count; i++)
 					_expandingNodes[i].IsExpandingNow = false;
 				_expandingNodes.Clear();
 			}
 			Invalidate();
+
+			void AbortTasks()
+            {
+				lock (this._lock)
+                {
+					if (!this._tasks.Any())
+						return;
+					this._cancellationTokenSource.Cancel();
+					Task.WaitAll(this._tasks.ToArray());
+					this._tasks.Clear();
+                }
+            }
 		}
 
 		internal void SetIsExpanded(TreeNodeAdv node, bool value, bool ignoreChildren)
@@ -802,16 +813,24 @@ namespace Aga.Controls.Tree
 			eargs.Value = value;
 			eargs.IgnoreChildren = ignoreChildren;
 
-			if (AsyncExpanding && LoadOnDemand && !_threadPool.IsMyThread(Thread.CurrentThread))
-			{
-				WaitCallback wc = delegate(object argument) { SetIsExpanded((ExpandArgs)argument); };
-				_threadPool.QueueUserWorkItem(wc, eargs);
-			}
+			var cancellationToken = this._cancellationTokenSource.Token;
+
+			if (AsyncExpanding && LoadOnDemand)
+				StartTask();
 			else
-				SetIsExpanded(eargs);
+				SetIsExpanded(eargs, cancellationToken);
+
+			void StartTask()
+            {
+				lock(this._lock)
+                {
+					Task task = Task.Run(() => SetIsExpanded(eargs, cancellationToken), cancellationToken);
+					this._tasks.Add(task);
+				}
+			}
 		}
 
-		private void SetIsExpanded(ExpandArgs eargs)
+		private void SetIsExpanded(ExpandArgs eargs, CancellationToken cancellationToken)
 		{
 			bool update = !eargs.IgnoreChildren && !AsyncExpanding;
 			if (update)
@@ -819,10 +838,10 @@ namespace Aga.Controls.Tree
 			try
 			{
 				if (IsMyNode(eargs.Node) && eargs.Node.IsExpanded != eargs.Value)
-					SetIsExpanded(eargs.Node, eargs.Value);
+					SetIsExpanded(eargs.Node, eargs.Value, cancellationToken);
 
 				if (!eargs.IgnoreChildren)
-					SetIsExpandedRecursive(eargs.Node, eargs.Value);
+					SetIsExpandedRecursive(eargs.Node, eargs.Value, cancellationToken);
 			}
 			finally
 			{
@@ -831,10 +850,12 @@ namespace Aga.Controls.Tree
 			}
 		}
 
-		internal void SetIsExpanded(TreeNodeAdv node, bool value)
+		internal void SetIsExpanded(TreeNodeAdv node, bool value, CancellationToken cancellationToken)
 		{
 			if (Root == node && !value)
 				return; //Can't collapse root node
+
+			cancellationToken.ThrowIfCancellationRequested();
 
 			if (value)
 			{
@@ -894,13 +915,15 @@ namespace Aga.Controls.Tree
 			}
 		}
 
-		internal void SetIsExpandedRecursive(TreeNodeAdv root, bool value)
+		internal void SetIsExpandedRecursive(TreeNodeAdv root, bool value, CancellationToken cancellationToken)
 		{
 			for (int i = 0; i < root.Nodes.Count; i++)
 			{
+				cancellationToken.ThrowIfCancellationRequested();
+
 				TreeNodeAdv node = root.Nodes[i];
 				node.IsExpanded = value;
-				SetIsExpandedRecursive(node, value);
+				SetIsExpandedRecursive(node, value, cancellationToken);
 			}
 		}
 

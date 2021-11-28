@@ -25,9 +25,11 @@ namespace SampleApp
 			return true;
 		}
 
+#pragma warning disable CS0067
 		public event EventHandler<TreeModelEventArgs> NodesChanged;
 		public event EventHandler<TreeModelEventArgs> NodesInserted;
 		public event EventHandler<TreeModelEventArgs> NodesRemoved;
 		public event EventHandler<TreePathEventArgs> StructureChanged;
+#pragma warning restore CS0067
 	}
 }
