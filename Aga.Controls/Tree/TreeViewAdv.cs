@@ -816,15 +816,25 @@ namespace Aga.Controls.Tree
 			var cancellationToken = this._cancellationTokenSource.Token;
 
 			if (AsyncExpanding && LoadOnDemand)
-				StartTask();
+				SetIsExpandedAsTask();
 			else
 				SetIsExpanded(eargs, cancellationToken);
 
-			void StartTask()
+			void SetIsExpandedAsTask()
             {
 				lock(this._lock)
                 {
-					Task task = Task.Run(() => SetIsExpanded(eargs, cancellationToken), cancellationToken);
+					Task task = Task.Run(() =>
+					{
+						try
+						{
+							SetIsExpanded(eargs, cancellationToken);
+						}
+						catch (OperationCanceledException)
+						{
+							// Ignore
+						}
+					});
 					this._tasks.Add(task);
 				}
 			}
