@@ -40,6 +40,7 @@ namespace Aga.Controls.Tree
 		private IncrementalSearch _search;
 		private List<TreeNodeAdv> _expandingNodes = new List<TreeNodeAdv>();
 		private AbortableThreadPool _threadPool = new AbortableThreadPool();
+		private CancellationTokenSource _cancellationTokenSource = new CancellationTokenSource();
 
 		#region Public Events
 
@@ -786,10 +787,11 @@ namespace Aga.Controls.Tree
 		{
 			lock (_expandingNodes)
 			{
-				_threadPool.CancelAll(true);
+				_threadPool.CancelAll(this._cancellationTokenSource);
 				for (int i = 0; i < _expandingNodes.Count; i++)
 					_expandingNodes[i].IsExpandingNow = false;
 				_expandingNodes.Clear();
+				this._cancellationTokenSource = new CancellationTokenSource();
 			}
 			Invalidate();
 		}
@@ -801,16 +803,27 @@ namespace Aga.Controls.Tree
 			eargs.Value = value;
 			eargs.IgnoreChildren = ignoreChildren;
 
+            CancellationToken cancelToken = _cancellationTokenSource.Token;
+
 			if (AsyncExpanding && LoadOnDemand && !_threadPool.IsMyThread(Thread.CurrentThread))
 			{
-				WaitCallback wc = delegate(object argument) { SetIsExpanded((ExpandArgs)argument); };
+				WaitCallback wc = delegate (object argument) { SetIsExpanded((ExpandArgs)argument, cancelToken); };
 				_threadPool.QueueUserWorkItem(wc, eargs);
 			}
 			else
-				SetIsExpanded(eargs);
+			{
+                try
+                {
+					SetIsExpanded(eargs, cancelToken);
+				}
+				catch (OperationCanceledException)
+                {
+					// Ignore
+                }
+			}
 		}
 
-		private void SetIsExpanded(ExpandArgs eargs)
+		private void SetIsExpanded(ExpandArgs eargs, CancellationToken cancelToken)
 		{
 			bool update = !eargs.IgnoreChildren && !AsyncExpanding;
 			if (update)
@@ -818,10 +831,10 @@ namespace Aga.Controls.Tree
 			try
 			{
 				if (IsMyNode(eargs.Node) && eargs.Node.IsExpanded != eargs.Value)
-					SetIsExpanded(eargs.Node, eargs.Value);
+					SetIsExpanded(eargs.Node, eargs.Value, cancelToken);
 
 				if (!eargs.IgnoreChildren)
-					SetIsExpandedRecursive(eargs.Node, eargs.Value);
+					SetIsExpandedRecursive(eargs.Node, eargs.Value, cancelToken);
 			}
 			finally
 			{
@@ -830,10 +843,12 @@ namespace Aga.Controls.Tree
 			}
 		}
 
-		internal void SetIsExpanded(TreeNodeAdv node, bool value)
+		internal void SetIsExpanded(TreeNodeAdv node, bool value, CancellationToken cancelToken)
 		{
 			if (Root == node && !value)
 				return; //Can't collapse root node
+
+			cancelToken.ThrowIfCancellationRequested();
 
 			if (value)
 			{
@@ -893,13 +908,15 @@ namespace Aga.Controls.Tree
 			}
 		}
 
-		internal void SetIsExpandedRecursive(TreeNodeAdv root, bool value)
+		internal void SetIsExpandedRecursive(TreeNodeAdv root, bool value, CancellationToken cancelToken)
 		{
 			for (int i = 0; i < root.Nodes.Count; i++)
 			{
+				cancelToken.ThrowIfCancellationRequested();
+
 				TreeNodeAdv node = root.Nodes[i];
 				node.IsExpanded = value;
-				SetIsExpandedRecursive(node, value);
+				SetIsExpandedRecursive(node, value, cancelToken);
 			}
 		}
 

@@ -48,8 +48,15 @@ namespace Aga.Controls.Threading
 					_threads.Add(item, Thread.CurrentThread);
 
 				}
-				ExecutionContext.Run(item.Context,
-					delegate { item.Callback(item.State); }, null);
+                try
+                {
+					ExecutionContext.Run(item.Context,
+						delegate { item.Callback(item.State); }, null);
+				}
+				catch (OperationCanceledException)
+                {
+					// Ignore
+                }
 			}
 			finally
 			{
@@ -74,45 +81,56 @@ namespace Aga.Controls.Threading
 			}
 		}
 
-		public WorkItemStatus Cancel(WorkItem item, bool allowAbort)
-		{
-			if (item == null)
-				throw new ArgumentNullException("item");
-			lock (_callbacks)
-			{
-				LinkedListNode<WorkItem> node = _callbacks.Find(item);
-				if (node != null)
-				{
-					_callbacks.Remove(node);
-					return WorkItemStatus.Queued;
-				}
-				else if (_threads.ContainsKey(item))
-				{
-					if (allowAbort)
-					{
-						_threads[item].Abort();
-						_threads.Remove(item);
-						return WorkItemStatus.Aborted;
-					}
-					else
-						return WorkItemStatus.Executing;
-				}
-				else
-					return WorkItemStatus.Completed;
-			}
-		}
+		//public WorkItemStatus Cancel(WorkItem item, bool allowAbort)
+		//{
+		//	if (item == null)
+		//		throw new ArgumentNullException("item");
+		//	lock (_callbacks)
+		//	{
+		//		LinkedListNode<WorkItem> node = _callbacks.Find(item);
+		//		if (node != null)
+		//		{
+		//			_callbacks.Remove(node);
+		//			return WorkItemStatus.Queued;
+		//		}
+		//		else if (_threads.ContainsKey(item))
+		//		{
+		//			if (allowAbort)
+		//			{
+		//				_threads[item].Abort();
+		//				_threads.Remove(item);
+		//				return WorkItemStatus.Aborted;
+		//			}
+		//			else
+		//				return WorkItemStatus.Executing;
+		//		}
+		//		else
+		//			return WorkItemStatus.Completed;
+		//	}
+		//}
 
-		public void CancelAll(bool allowAbort)
+		//public void CancelAll(bool allowAbort)
+		//{
+		//	lock (_callbacks)
+		//	{
+		//		_callbacks.Clear();
+		//		if (allowAbort)
+		//		{
+		//			foreach (Thread t in _threads.Values)
+		//				t.Abort();
+		//			_threads.Clear();
+		//		}
+		//	}
+		//}
+
+		public void CancelAll(CancellationTokenSource tokenSource)
 		{
+			tokenSource.Cancel();
+
 			lock (_callbacks)
 			{
 				_callbacks.Clear();
-				if (allowAbort)
-				{
-					foreach (Thread t in _threads.Values)
-						t.Abort();
-					_threads.Clear();
-				}
+				_threads.Clear();
 			}
 		}
 	}
